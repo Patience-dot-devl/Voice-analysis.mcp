@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/
+
+# OS
+.DS_Store
+
+# Conductor workspace context
+.context/
+
+# Model caches / scratch audio
+*.wav.tmp
+.cache/

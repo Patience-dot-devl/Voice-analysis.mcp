@@ -1,0 +1,30 @@
+[project]
+name = "voice-analysis-mcp"
+version = "0.1.0"
+description = "MCP server that gives LLMs tools for qualitative analysis of calls, voice recordings, and other audio."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+dependencies = [
+    "mcp[cli]>=1.2.0",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    "librosa>=0.10",
+    "matplotlib>=3.8",
+    "faster-whisper>=1.0",
+]
+
+[project.scripts]
+voice-analysis-mcp = "voice_analysis_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/voice_analysis_mcp"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
