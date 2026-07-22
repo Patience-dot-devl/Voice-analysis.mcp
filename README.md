@@ -40,8 +40,12 @@ uv run pytest        # optional: verify
 
 ### Claude Code
 
+Working inside this repo, nothing to configure: the checked-in [`.mcp.json`](.mcp.json)
+registers the server automatically (approve it when prompted). From any other
+project, register it globally:
+
 ```bash
-claude mcp add voice-analysis -- uv run --directory /path/to/voice-analysis.mcp voice-analysis-mcp
+claude mcp add --scope user voice-analysis -- uv run --directory /path/to/voice-analysis.mcp voice-analysis-mcp
 ```
 
 ### Claude Desktop (`claude_desktop_config.json`)
@@ -56,6 +60,31 @@ claude mcp add voice-analysis -- uv run --directory /path/to/voice-analysis.mcp 
   }
 }
 ```
+
+## How a Claude instance uses this
+
+The model only needs a **file path** — every tool takes an absolute path to a
+local audio file, so "analyze the call in ~/Downloads/call-4711.mp3" is enough
+to start. The server's instructions steer the model through the intended flow:
+
+1. `get_audio_info` — learn duration and channel count (drives everything else)
+2. `analyze_conversation` — cheap whole-file pass: talk balance, dead air, interruptions
+3. `transcribe` — content, per channel on stereo calls for who-said-what
+4. `analyze_prosody` / `analyze_quality` / `render_spectrogram` on windows the
+   first passes flagged — all results use absolute seconds, so findings from
+   different tools line up
+
+Example prompts that work end-to-end:
+
+> Review ~/calls/support-0412.wav: who dominated the conversation, were there
+> awkward silences, and how did the agent's tone change after the customer
+> pushed back?
+
+> Compare the TTS output in v1.wav and v2.wav — which sounds less monotone and
+> are there any audible artifacts?
+
+Results are compact JSON (rounded numbers, capped lists) sized for a model's
+context window; images come back as MCP image content Claude can view directly.
 
 ## Notes & design choices
 
