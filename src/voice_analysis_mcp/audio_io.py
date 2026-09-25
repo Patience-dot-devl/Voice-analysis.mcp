@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -37,20 +38,28 @@ def resolve_path(path: str) -> Path:
 
 def probe(path: str) -> dict:
     """Return raw ffprobe metadata (format + streams) for a media file."""
-    _require_ffmpeg()
     p = resolve_path(path)
+    st = p.stat()
+    return _probe_cached(str(p), st.st_mtime_ns, st.st_size)
+
+
+@lru_cache(maxsize=64)
+def _probe_cached(path: str, _mtime_ns: int, _size: int) -> dict:
+    """ffprobe is a subprocess spawn; cache per (path, mtime, size) so one tool
+    call that needs both metadata and samples probes only once."""
+    _require_ffmpeg()
     result = subprocess.run(
         [
             "ffprobe", "-v", "error",
             "-print_format", "json",
             "-show_format", "-show_streams",
-            str(p),
+            path,
         ],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
-        raise AudioError(f"ffprobe failed for {p}: {result.stderr.strip()}")
+        raise AudioError(f"ffprobe failed for {path}: {result.stderr.strip()}")
     return json.loads(result.stdout)
 
 
@@ -78,6 +87,33 @@ def audio_summary(path: str) -> dict:
     }
 
 
+def validate_window(
+    start: float | None, end: float | None, duration: float | None
+) -> tuple[float, float | None]:
+    """Normalise a [start, end] window against the file duration.
+
+    Returns (start, end) with start >= 0. Raises AudioError for negative,
+    inverted, or out-of-file windows. A missing duration (some streams don't
+    report one) skips the upper-bound check.
+    """
+    s = 0.0 if start is None else float(start)
+    e = None if end is None else float(end)
+    if s < 0:
+        raise AudioError(f"start_time must be >= 0, got {s}")
+    if e is not None and e <= s:
+        raise AudioError(f"end_time ({e}) must be greater than start_time ({s})")
+    if duration:
+        if s >= duration:
+            raise AudioError(
+                f"start_time ({s}) is beyond the end of the file ({duration:.2f}s)"
+            )
+        if e is not None and e > duration + 0.05:
+            raise AudioError(
+                f"end_time ({e}) is beyond the end of the file ({duration:.2f}s)"
+            )
+    return s, e
+
+
 def load_audio(
     path: str,
     sample_rate: int | None = None,
@@ -96,6 +132,7 @@ def load_audio(
     meta = audio_summary(path)
     src_channels = meta["channels"]
     sr = sample_rate or meta["sample_rate_hz"] or 16000
+    start, end = validate_window(start, end, meta["duration_seconds"])
 
     if channel is not None:
         if not 0 <= channel < src_channels:
@@ -104,14 +141,11 @@ def load_audio(
             )
 
     cmd = ["ffmpeg", "-v", "error"]
-    if start is not None and start > 0:
+    if start > 0:
         cmd += ["-ss", f"{start:.3f}"]
     cmd += ["-i", str(p)]
     if end is not None:
-        dur = end - (start or 0.0)
-        if dur <= 0:
-            raise AudioError(f"end_time ({end}) must be greater than start_time ({start or 0})")
-        cmd += ["-t", f"{dur:.3f}"]
+        cmd += ["-t", f"{end - start:.3f}"]
 
     if channel is not None:
         cmd += ["-af", f"pan=mono|c0=c{channel}"]
@@ -142,16 +176,26 @@ def extract_segment_to_file(
     start: float,
     end: float,
     output_path: str | None = None,
+    overwrite: bool = False,
 ) -> str:
-    """Losslessly-ish extract [start, end] to a wav file and return its path."""
+    """Extract [start, end] to a 16-bit wav file and return its path.
+
+    Refuses to overwrite an existing file unless overwrite=True.
+    """
     _require_ffmpeg()
     p = resolve_path(path)
-    if end <= start:
-        raise AudioError(f"end_time ({end}) must be greater than start_time ({start})")
+    meta = audio_summary(path)
+    start, end = validate_window(start, end, meta["duration_seconds"])
+    if end is None:
+        raise AudioError("end_time is required")
     if output_path:
         out = Path(output_path).expanduser().resolve()
     else:
         out = p.with_name(f"{p.stem}_{start:.1f}s-{end:.1f}s.wav")
+    if out == p:
+        raise AudioError("output_path must differ from the source file")
+    if out.exists() and not overwrite:
+        raise AudioError(f"{out} already exists; pass overwrite=true to replace it")
     out.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         [
